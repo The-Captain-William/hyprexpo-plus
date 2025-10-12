@@ -277,8 +277,8 @@ APICALL EXPORT PLUGIN_DESCRIPTION_INFO PLUGIN_INIT(HANDLE handle) {
     HyprlandAPI::addDispatcherV2(PHANDLE, "hyprexpo:kb_select", ::onKbSelectTokenDispatcher);
     HyprlandAPI::addDispatcherV2(PHANDLE, "hyprexpo:kb_selecti", ::onKbSelectIndexDispatcher);
 
-    HyprlandAPI::addConfigKeyword(PHANDLE, "hyprexpo-gesture", ::expoGestureKeyword, {});
-    HyprlandAPI::addConfigKeyword(PHANDLE, "hyprexpo-workspace-method", ::workspaceMethodKeyword, {});
+    HyprlandAPI::addConfigKeyword(PHANDLE, "hyprexpo_gesture", ::expoGestureKeyword, {});
+    HyprlandAPI::addConfigKeyword(PHANDLE, "workspace_method", ::workspaceMethodKeyword, {});
 
     HyprlandAPI::addConfigValue(PHANDLE, "plugin:hyprexpo:columns", Hyprlang::INT{3});
     HyprlandAPI::addConfigValue(PHANDLE, "plugin:hyprexpo:gaps_in", Hyprlang::INT{5});
