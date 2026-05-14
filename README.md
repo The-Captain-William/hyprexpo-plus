@@ -7,6 +7,37 @@ HyprExpo+ is a fork of [HyprExpo](https://github.com/hyprwm/hyprland-plugins/tre
 
 https://github.com/user-attachments/assets/861baa26-46b6-4fa8-8d37-65cbb9ecbed4
 
+## Install
+
+### Via `hyprpm` (recommended)
+
+```bash
+hyprpm add https://github.com/sandwichfarm/hyprexpo-plus
+hyprpm enable hyprexpo-plus
+hyprpm reload
+```
+
+### Build from source
+
+For local development or testing patches:
+
+```bash
+git clone https://github.com/sandwichfarm/hyprexpo-plus
+cd hyprexpo-plus
+make all
+```
+
+To install a locally-built `.so` over the `hyprpm`-managed copy:
+
+```bash
+sudo install -m 755 hyprexpo.so \
+    /var/cache/hyprpm/$USER/hyprexpo-plus/hyprexpo-plus.so
+hyprpm reload
+```
+
+> [!WARNING]
+> Use `install` (or `cp --remove-destination`), **not** plain `cp`. The plugin `.so` is `mmap`'d into the running Hyprland process; `cp` overwrites in place and corrupts the live mapping, which will SIGBUS Hyprland on the next page fault — taking your session down. `install` writes a temp file and atomically `rename(2)`s it, so the old inode stays alive for any still-mapped process and the new file gets a fresh inode.
+
 ## Config
 A great start to configure this plugin would be adding this code to the `plugin` section of your hyprland configuration file:  
 ```ini
