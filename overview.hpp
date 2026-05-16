@@ -7,7 +7,7 @@
 #include <hyprland/src/render/Framebuffer.hpp>
 #include <hyprland/src/render/Texture.hpp>
 #include <hyprland/src/helpers/AnimatedVariable.hpp>
-#include <hyprland/src/helpers/signal/Signal.hpp>
+#include <hyprland/src/event/EventBus.hpp>
 #include <vector>
 
 // saves on resources, but is a bit broken rn with blur.
@@ -68,15 +68,15 @@ class COverview {
     bool       damageDirty = false;
 
     struct SWorkspaceImage {
-        SP<Render::IFramebuffer> fb;
+        CFramebuffer             fb;
         int64_t                  workspaceID = -1;
         PHLWORKSPACE             pWorkspace;
         CBox                     box;
         // Label textures per state for customization
-        SP<Render::ITexture>     labelTexDefault;
-        SP<Render::ITexture>     labelTexHover;
-        SP<Render::ITexture>     labelTexFocus;
-        SP<Render::ITexture>     labelTexCurrent;
+        SP<CTexture>     labelTexDefault;
+        SP<CTexture>     labelTexHover;
+        SP<CTexture>     labelTexFocus;
+        SP<CTexture>     labelTexCurrent;
         Vector2D                 labelSizeDefault = {0, 0};
         Vector2D                 labelSizeHover   = {0, 0};
         Vector2D                 labelSizeFocus   = {0, 0};

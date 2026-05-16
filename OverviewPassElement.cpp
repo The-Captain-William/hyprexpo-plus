@@ -6,9 +6,8 @@ COverviewPassElement::COverviewPassElement() {
     ;
 }
 
-std::vector<UP<IPassElement>> COverviewPassElement::draw() {
+void COverviewPassElement::draw(const CRegion& damage) {
     g_pOverview->fullRender();
-    return {};
 }
 
 bool COverviewPassElement::needsLiveBlur() {
@@ -31,8 +30,4 @@ CRegion COverviewPassElement::opaqueRegion() {
         return CRegion{};
 
     return CBox{{}, g_pOverview->pMonitor->m_size};
-}
-
-ePassElementType COverviewPassElement::type() {
-    return EK_CUSTOM;
 }

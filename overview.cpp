@@ -7,10 +7,10 @@
 #include <hyprland/src/Compositor.hpp>
 #include <hyprland/src/config/ConfigValue.hpp>
 #include <hyprland/src/config/ConfigManager.hpp>
-#include <hyprland/src/config/shared/actions/ConfigActions.hpp>
-#include <hyprland/src/config/shared/animation/AnimationTree.hpp>
+#include <hyprland/src/config/ConfigDataValues.hpp>
 #include <hyprland/src/managers/animation/AnimationManager.hpp>
 #include <hyprland/src/managers/animation/DesktopAnimationManager.hpp>
+#include <hyprland/src/managers/KeybindManager.hpp>
 #include <hyprland/src/managers/input/InputManager.hpp>
 #include <hyprland/src/managers/PointerManager.hpp>
 #include <hyprland/src/helpers/time/Time.hpp>
@@ -21,7 +21,6 @@
 #undef protected
 #include "OverviewPassElement.hpp"
 #include <hyprland/src/render/OpenGL.hpp>
-#include <hyprland/src/config/shared/complex/ComplexDataTypes.hpp>
 #include <pango/pangocairo.h>
 #include <cmath>
 
@@ -153,7 +152,7 @@ static void renderGradientBorder(const CBox& box, int borderSize, const SHyprGra
         const float cy = r.y + r.h / 2.0;
         const float d  = cx * g.x + cy * g.y;
         const float t  = (d - minD) / range;
-        Render::GL::g_pHyprOpenGL->renderRect(r, mixCol(grad.c1, grad.c2, t), {});
+        g_pHyprOpenGL->renderRect(r, mixCol(grad.c1, grad.c2, t), {});
     };
 
     const double cr = std::clamp((double)round, 0.0, std::min(box.w, box.h) / 2.0);
@@ -179,7 +178,7 @@ static void renderGradientBorder(const CBox& box, int borderSize, const SHyprGra
     }
 }
 
-static SP<Render::ITexture> renderNumberTexture(const std::string& text, const CHyprColor& color, const Vector2D& bufferSize, const float scale, const int fontSize) {
+static SP<CTexture> renderNumberTexture(const std::string& text, const CHyprColor& color, const Vector2D& bufferSize, const float scale, const int fontSize) {
     const auto CAIROSURFACE = cairo_image_surface_create(CAIRO_FORMAT_ARGB32, bufferSize.x, bufferSize.y);
     const auto CAIRO        = cairo_create(CAIROSURFACE);
 
@@ -241,11 +240,17 @@ static SP<Render::ITexture> renderNumberTexture(const std::string& text, const C
 
     cairo_surface_flush(CAIROSURFACE);
 
-    auto tex = g_pHyprRenderer->createTexture(CAIROSURFACE);
-    if (tex) {
-        tex->setTexParameter(GL_TEXTURE_MAG_FILTER, GL_NEAREST);
-        tex->setTexParameter(GL_TEXTURE_MIN_FILTER, GL_NEAREST);
-    }
+    auto tex = makeShared<CTexture>();
+    const auto DATA = cairo_image_surface_get_data(CAIROSURFACE);
+    tex->allocate();
+    glBindTexture(GL_TEXTURE_2D, tex->m_texID);
+    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, GL_NEAREST);
+    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_NEAREST);
+#ifndef GLES2
+    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_SWIZZLE_R, GL_BLUE);
+    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_SWIZZLE_B, GL_RED);
+#endif
+    glTexImage2D(GL_TEXTURE_2D, 0, GL_RGBA, bufferSize.x, bufferSize.y, 0, GL_RGBA, GL_UNSIGNED_BYTE, DATA);
 
     cairo_destroy(CAIRO);
     cairo_surface_destroy(CAIROSURFACE);
@@ -356,12 +361,12 @@ static std::pair<bool, int> getWorkspaceMethodForMonitor(PHLMONITOR monitor) {
 }
 
 COverview::~COverview() {
-    Render::GL::g_pHyprOpenGL->makeEGLCurrent();
+    g_pHyprRenderer->makeEGLCurrent();
     images.clear(); // otherwise we get a vram leak
     g_pPointerManager->resetCursorImage();
     g_pInputManager->simulateMouseMovement();
     if (pMonitor)
-        pMonitor->m_blurFBDirty = true;
+        g_pHyprOpenGL->markBlurDirtyForMonitor(pMonitor.lock());
     resetSubmapIfNeeded();
 }
 
@@ -448,7 +453,7 @@ COverview::COverview(PHLWORKSPACE startedOn_, bool swipe_) : startedOn(startedOn
         pMonitor->m_activeWorkspace = startedOn;
     }
 
-    Render::GL::g_pHyprOpenGL->makeEGLCurrent();
+    g_pHyprRenderer->makeEGLCurrent();
 
     Vector2D tileSize       = pMonitor->m_size / SIDE_LENGTH;
     Vector2D tileRenderSize = (pMonitor->m_size - Vector2D{GAP_WIDTH * pMonitor->m_scale, GAP_WIDTH * pMonitor->m_scale} * (SIDE_LENGTH - 1)) / SIDE_LENGTH;
@@ -489,12 +494,10 @@ COverview::COverview(PHLWORKSPACE startedOn_, bool swipe_) : startedOn(startedOn
 
     for (size_t i = 0; i < (size_t)(SIDE_LENGTH * SIDE_LENGTH); ++i) {
         COverview::SWorkspaceImage& image = images[i];
-        if (!image.fb)
-            image.fb = g_pHyprRenderer->createFB("hyprexpo");
-        image.fb->alloc(monbox.w, monbox.h, framebufferFormatWithAlpha(PMONITOR->m_output->state->state().drmFormat));
+        image.fb.alloc(monbox.w, monbox.h, framebufferFormatWithAlpha(PMONITOR->m_output->state->state().drmFormat));
 
         CRegion fakeDamage{0, 0, INT16_MAX, INT16_MAX};
-        g_pHyprRenderer->beginRender(PMONITOR, fakeDamage, Render::RENDER_MODE_FULL_FAKE, nullptr, image.fb);
+        g_pHyprRenderer->beginRender(PMONITOR, fakeDamage, RENDER_MODE_FULL_FAKE, nullptr, &image.fb);
 
         clearWithColor(CHyprColor{0, 0, 0, 1.0});
 
@@ -525,7 +528,7 @@ COverview::COverview(PHLWORKSPACE startedOn_, bool swipe_) : startedOn(startedOn
         image.box = {(i % SIDE_LENGTH) * tileRenderSize.x + (i % SIDE_LENGTH) * GAP_WIDTH, (i / SIDE_LENGTH) * tileRenderSize.y + (i / SIDE_LENGTH) * GAP_WIDTH, tileRenderSize.x,
                      tileRenderSize.y};
 
-        g_pHyprRenderer->m_renderData.blockScreenShader = true;
+        g_pHyprOpenGL->m_renderData.blockScreenShader = true;
         g_pHyprRenderer->endRender();
     }
 
@@ -544,10 +547,10 @@ COverview::COverview(PHLWORKSPACE startedOn_, bool swipe_) : startedOn(startedOn
     // zoom on the current workspace.
     // const auto& TILE = images[std::clamp(currentid, 0, SIDE_LENGTH * SIDE_LENGTH)];
 
-    g_pAnimationManager->createAnimation(pMonitor->m_size * pMonitor->m_size / tileSize, size, Config::animationTree()->getAnimationPropertyConfig("windowsMove"), AVARDAMAGE_NONE);
+    g_pAnimationManager->createAnimation(pMonitor->m_size * pMonitor->m_size / tileSize, size, g_pConfigManager->getAnimationPropertyConfig("windowsMove"), AVARDAMAGE_NONE);
     g_pAnimationManager->createAnimation((-((pMonitor->m_size / (double)SIDE_LENGTH) * Vector2D{currentid % SIDE_LENGTH, currentid / SIDE_LENGTH}) * pMonitor->m_scale) *
                                              (pMonitor->m_size / tileSize),
-                                         pos, Config::animationTree()->getAnimationPropertyConfig("windowsMove"), AVARDAMAGE_NONE);
+                                         pos, g_pConfigManager->getAnimationPropertyConfig("windowsMove"), AVARDAMAGE_NONE);
 
     size->setUpdateCallback(damageMonitor);
     pos->setUpdateCallback(damageMonitor);
@@ -825,7 +828,7 @@ void COverview::redrawID(int id, bool forcelowres) {
 
     blockOverviewRendering = true;
 
-    Render::GL::g_pHyprOpenGL->makeEGLCurrent();
+    g_pHyprRenderer->makeEGLCurrent();
 
     id = std::clamp(id, 0, SIDE_LENGTH * SIDE_LENGTH);
 
@@ -855,15 +858,13 @@ void COverview::redrawID(int id, bool forcelowres) {
 
     auto& image = images[id];
 
-    if (!image.fb)
-        image.fb = g_pHyprRenderer->createFB("hyprexpo");
-    if (image.fb->m_size != monbox.size()) {
-        image.fb->release();
-        image.fb->alloc(monbox.w, monbox.h, framebufferFormatWithAlpha(pMonitor->m_output->state->state().drmFormat));
+    if (image.fb.m_size != monbox.size()) {
+        image.fb.release();
+        image.fb.alloc(monbox.w, monbox.h, framebufferFormatWithAlpha(pMonitor->m_output->state->state().drmFormat));
     }
 
     CRegion fakeDamage{0, 0, INT16_MAX, INT16_MAX};
-    g_pHyprRenderer->beginRender(pMonitor.lock(), fakeDamage, Render::RENDER_MODE_FULL_FAKE, nullptr, image.fb);
+    g_pHyprRenderer->beginRender(pMonitor.lock(), fakeDamage, RENDER_MODE_FULL_FAKE, nullptr, &image.fb);
 
     clearWithColor(CHyprColor{0, 0, 0, 1.0});
 
@@ -893,7 +894,7 @@ void COverview::redrawID(int id, bool forcelowres) {
     } else
         g_pHyprRenderer->renderWorkspace(pMonitor.lock(), PWORKSPACE, Time::steadyNow(), monbox);
 
-    g_pHyprRenderer->m_renderData.blockScreenShader = true;
+    g_pHyprOpenGL->m_renderData.blockScreenShader = true;
     g_pHyprRenderer->endRender();
 
     // Restore the original monitor state after capture
@@ -978,9 +979,9 @@ void COverview::close() {
         const auto OLDWS = pMonitor->m_activeWorkspace;
 
         if (!NEWIDWS)
-            Config::Actions::changeWorkspace(std::to_string(NEWID));
+            g_pKeybindManager->changeworkspace(std::to_string(NEWID));
         else
-            Config::Actions::changeWorkspace(NEWIDWS->getConfigName());
+            g_pKeybindManager->changeworkspace(NEWIDWS->getConfigName());
 
         g_pDesktopAnimationManager->startAnimation(pMonitor->m_activeWorkspace, CDesktopAnimationManager::ANIMATION_TYPE_IN, true, true);
         g_pDesktopAnimationManager->startAnimation(OLDWS, CDesktopAnimationManager::ANIMATION_TYPE_OUT, false, true);
@@ -1072,7 +1073,7 @@ void COverview::fullRender() {
             // no shadow in this branch
 
             CRegion damage{0, 0, INT16_MAX, INT16_MAX};
-            Render::GL::g_pHyprOpenGL->renderTextureInternal(images[id].fb->getTexture(), texbox, {.damage = &damage, .a = 1.0, .round = tileRound, .roundingPower = ROUND_PWR});
+            g_pHyprOpenGL->renderTextureInternal(images[id].fb.getTexture(), texbox, {.damage = &damage, .a = 1.0, .round = tileRound, .roundingPower = ROUND_PWR});
         }
     }
 
@@ -1214,7 +1215,7 @@ void COverview::fullRender() {
                 const int         baseF = std::max(8, (int)**PLABELSIZE);
                 const int         st    = resolveState(id);
 
-                auto ensureTex = [&](SP<Render::ITexture>& tex, Vector2D& sz, const CHyprColor& col, float scaleMul) {
+                auto ensureTex = [&](SP<CTexture>& tex, Vector2D& sz, const CHyprColor& col, float scaleMul) {
                     if (!tex || tex->m_texID == 0) {
                         const int fsz = std::max(8, (int)std::round(baseF * scaleMul));
                         Vector2D  buf{std::max(32, fsz * 2), std::max(24, fsz + 8)};
@@ -1230,7 +1231,7 @@ void COverview::fullRender() {
                 float      scl = 1.0f;
                 static auto* const* PLPIXELSNAP = (Hyprlang::INT* const*)HyprlandAPI::getConfigValue(PHANDLE, "plugin:hyprexpo:label_pixel_snap")->getDataStaticPtr();
 
-                auto drawWithBG = [&](SP<Render::ITexture>& tex, const Vector2D& tsize) {
+                auto drawWithBG = [&](SP<CTexture>& tex, const Vector2D& tsize) {
                     const int pad = **PLBGPAD;
                     // background size
                     Vector2D bgSize = {tsize.x + pad * 2, tsize.y + pad * 2};
@@ -1249,15 +1250,15 @@ void COverview::fullRender() {
                         lb.round();
                     }
                     // draw
-                    Render::GL::g_pHyprOpenGL->renderRect(bg, CHyprColor{(uint64_t)**PLBGCOL}, {.round = roundPx});
-                    Render::GL::g_pHyprOpenGL->renderTexture(tex, lb, {.a = 1.0});
+                    g_pHyprOpenGL->renderRect(bg, CHyprColor{(uint64_t)**PLBGCOL}, {.round = roundPx});
+                    g_pHyprOpenGL->renderTexture(tex, lb, {.a = 1.0});
                 };
 
-                auto drawNoBG = [&](SP<Render::ITexture>& tex, const Vector2D& tsize) {
+                auto drawNoBG = [&](SP<CTexture>& tex, const Vector2D& tsize) {
                     CBox lb = placeBox(tile, tsize);
                     if (**PLPIXELSNAP)
                         lb.round();
-                    Render::GL::g_pHyprOpenGL->renderTexture(tex, lb, {.a = 1.0});
+                    g_pHyprOpenGL->renderTexture(tex, lb, {.a = 1.0});
                 };
 
                 if (st == 1) { // hover
@@ -1321,13 +1322,13 @@ void COverview::fullRender() {
             // Render as gradient border (hyprland style)
             const auto spec = parseGradientSpec(effectiveSpec);
             if (spec.valid) {
-                Config::CGradientValueData grad;
+                CGradientValueData grad;
                 grad.m_colors.clear();
                 grad.m_colors.push_back(spec.c1);
                 grad.m_colors.push_back(spec.c2);
                 grad.m_angle = spec.angleDeg * (float)M_PI / 180.f;
                 grad.updateColorsOk();
-                Render::GL::g_pHyprOpenGL->renderBorder(box, grad, {.round = roundScaled, .roundingPower = ROUND_PWR, .borderSize = BWIDTH});
+                g_pHyprOpenGL->renderBorder(box, grad, {.round = roundScaled, .roundingPower = ROUND_PWR, .borderSize = BWIDTH});
             }
         } else if (!effectiveSpec.empty()) {
             // Parse as solid color (rgb/hex format)
@@ -1349,7 +1350,7 @@ void COverview::fullRender() {
             }
 
             // Render as simple border
-            Render::GL::g_pHyprOpenGL->renderBorder(box, color, {.round = roundScaled, .roundingPower = ROUND_PWR, .borderSize = BWIDTH});
+            g_pHyprOpenGL->renderBorder(box, color, {.round = roundScaled, .roundingPower = ROUND_PWR, .borderSize = BWIDTH});
         }
     };
 
